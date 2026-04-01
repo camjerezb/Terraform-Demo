@@ -19,7 +19,7 @@ allow = result if {
     
     # Validamos que la IP esté dentro de la lista de cidr_blocks
     # Usamos [_] para verificar si el valor existe en esa lista
-    ingress.cidr_blocks[_] == "152.230.70.226/32"
+    ingress.cidr_blocks[_] == "152.230.71.226/32"
     
     result := {
         "status": true,
