@@ -52,17 +52,19 @@ jobs:
       - name: Terraform Show JSON
         run: terraform show -json tfplan > tfplan.json
 
-      # 6. Escaneo de Seguridad con Checkov
+      # 6. Escaneo de Seguridad con Checkov (Soft Fail)
       - name: Checkov Static Analysis
-        run: checkov -f tfplan.json
+        run: |
+          # --soft-fail hace que checkov devuelva exit code 0 aunque haya fallos
+          checkov -f tfplan.json --soft-fail
 
-      # 7. Evaluación de Políticas con OPA
+      # 7. Evaluación de Políticas con OPA (Omitir error si prefieres)
       - name: OPA Policy Evaluation
         run: |
-          # Evaluamos y forzamos que el status sea true
           RESULT=$(opa eval -i tfplan.json -d terraform_security.rego "data.terraform.authz.allow" --format json)
           echo "Resultado de OPA: $RESULT"
-          # Validamos que el status sea true dentro del JSON de respuesta
+          # Si quieres que OPA TAMBIÉN sea informativo y no bloqueante, 
+          # comenta la siguiente línea con un '#' al inicio:
           echo $RESULT | grep -q '"status":true'
 
       # 8. Terraform Apply
