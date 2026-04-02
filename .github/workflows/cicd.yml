@@ -1,0 +1,69 @@
+name: "Terraform CI/CD con Seguridad"
+
+on:
+  push:
+    branches:
+      - main
+  pull_request:
+
+jobs:
+  terraform:
+    name: "Terraform Security & Deploy"
+    runs-on: ubuntu-latest
+
+    steps:
+      # 1. Descargar el código del repositorio
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      # 2. Configurar credenciales de AWS
+      - name: Configure AWS Credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region: us-east-1 # Ajusta a tu región
+
+      # 3. Instalar Terraform
+      - name: Setup Terraform
+        uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_wrapper: false # Desactivado para manejar el JSON manualmente
+
+      # 4. Instalar OPA y Checkov
+      - name: Install OPA
+        run: |
+          curl -L -o opa https://openpolicyagent.org/downloads/v0.61.0/opa_linux_amd64_static
+          chmod 755 ./opa
+          sudo mv opa /usr/local/bin/
+
+      - name: Install Checkov
+        run: |
+          pip3 install checkov
+
+      # 5. Ejecutar Comandos de Terraform e Inspección
+      - name: Terraform Init
+        run: terraform init
+
+      - name: Terraform Plan
+        run: terraform plan -out=tfplan
+
+      - name: Terraform Show JSON
+        run: terraform show -json tfplan > tfplan.json
+
+      # 6. Escaneo de Seguridad con Checkov
+      - name: Checkov Static Analysis
+        run: checkov -f tfplan.json
+
+      # 7. Evaluación de Políticas con OPA
+      - name: OPA Policy Evaluation
+        run: |
+          # Evaluamos y forzamos que el status sea true
+          RESULT=$(opa eval -i tfplan.json -d terraform_security.rego "data.terraform.authz.allow" --format json)
+          echo "Resultado de OPA: $RESULT"
+          # Validamos que el status sea true dentro del JSON de respuesta
+          echo $RESULT | grep -q '"status":true'
+
+      # 8. Terraform Apply
+      - name: Terraform Apply
+        run: terraform apply -auto-approve tfplan
