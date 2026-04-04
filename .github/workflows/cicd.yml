@@ -5,6 +5,12 @@ on:
     branches:
       - main
   pull_request:
+  workflow_dispatch:
+    inputs:
+      confirm_destroy:
+        description: 'Escribe "destroy" para confirmar la destrucción de la infraestructura'
+        required: true
+        default: ""
 
 jobs:
   terraform:
@@ -22,14 +28,14 @@ jobs:
         with:
           aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
           aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
-          aws-session-token: ${{ secrets.AWS_SESSION_TOKEN }} # Obligatorio en cuentas temporales
+          aws-session-token: ${{ secrets.AWS_SESSION_TOKEN }}
           aws-region: us-east-1
 
       # 3. Instalar Terraform
       - name: Setup Terraform
         uses: hashicorp/setup-terraform@v3
         with:
-          terraform_wrapper: false # Desactivado para manejar el JSON manualmente
+          terraform_wrapper: false
 
       # 4. Instalar OPA y Checkov
       - name: Install OPA
@@ -39,10 +45,9 @@ jobs:
           sudo mv opa /usr/local/bin/
 
       - name: Install Checkov
-        run: |
-          pip3 install checkov
+        run: pip3 install checkov
 
-      # 5. Ejecutar Comandos de Terraform e Inspección
+      # 5. Ejecutar Comandos de Terraform
       - name: Terraform Init
         run: terraform init
 
@@ -54,20 +59,61 @@ jobs:
 
       # 6. Escaneo de Seguridad con Checkov (Soft Fail)
       - name: Checkov Static Analysis
-        run: |
-          # --soft-fail hace que checkov devuelva exit code 0 aunque haya fallos
-          checkov -f tfplan.json --soft-fail
+        run: checkov -f tfplan.json --soft-fail
 
       # 7. Evaluación de Políticas con OPA (Modo Informativo)
       - name: OPA Policy Evaluation
         run: |
           RESULT=$(opa eval -i tfplan.json -d terraform_security.rego "data.terraform.authz.allow" --format json)
           echo "Resultado de OPA: $RESULT"
-          
-          # El '|| true' evita que el pipeline se rompa si el status es false
           echo $RESULT | grep -q '"status":true' || true
           echo "Validación de OPA finalizada (Soft-Fail activo)."
 
-      # 8. Terraform Apply
+      # 8. Terraform Apply (solo en push/PR, NO en destroy manual)
       - name: Terraform Apply
+        if: github.event_name != 'workflow_dispatch'
         run: terraform apply -auto-approve tfplan
+
+  # ─────────────────────────────────────────────────────────────
+  # JOB SEPARADO: Terraform Destroy con confirmación explícita
+  # Solo se ejecuta cuando el workflow es lanzado manualmente
+  # y el usuario escribe exactamente "destroy" en el input.
+  # ─────────────────────────────────────────────────────────────
+  terraform_destroy:
+    name: "Terraform Destroy (Requiere Confirmación)"
+    runs-on: ubuntu-latest
+    if: github.event_name == 'workflow_dispatch'
+
+    steps:
+      # 9. Validar confirmación antes de continuar
+      - name: Validar confirmación de destroy
+        run: |
+          if [ "${{ github.event.inputs.confirm_destroy }}" != "destroy" ]; then
+            echo "❌ Confirmación inválida. Debes escribir 'destroy' para continuar."
+            echo "   Valor recibido: '${{ github.event.inputs.confirm_destroy }}'"
+            exit 1
+          fi
+          echo "✅ Confirmación válida. Procediendo con terraform destroy..."
+
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Configure AWS Credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-session-token: ${{ secrets.AWS_SESSION_TOKEN }}
+          aws-region: us-east-1
+
+      - name: Setup Terraform
+        uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_wrapper: false
+
+      - name: Terraform Init
+        run: terraform init
+
+      # 10. Terraform Destroy
+      - name: Terraform Destroy
+        run: terraform destroy -auto-approve
